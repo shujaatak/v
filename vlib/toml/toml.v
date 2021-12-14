@@ -7,7 +7,6 @@ import toml.ast
 import toml.input
 import toml.scanner
 import toml.parser
-import strconv
 
 // Null is used in sumtype checks as a "default" value when nothing else is possible.
 pub struct Null {
@@ -135,7 +134,10 @@ pub fn parse_dotted_key(key string) ?[]string {
 		buf += ch.ascii_str()
 		if !in_string && ch == `.` {
 			if buf != '' && buf != ' ' {
-				out << buf[..buf.len - 1]
+				buf = buf[..buf.len - 1]
+				if buf != '' && buf != ' ' {
+					out << buf
+				}
 			}
 			buf = ''
 			continue
@@ -151,40 +153,76 @@ pub fn parse_dotted_key(key string) ?[]string {
 	return out
 }
 
+// parse_array_key converts `key` string to a key and index part.
+fn parse_array_key(key string) (string, int) {
+	mut index := -1
+	mut k := key
+	if k.contains('[') {
+		index = k.all_after('[').all_before(']').int()
+		if k.starts_with('[') {
+			k = '' // k.all_after(']')
+		} else {
+			k = k.all_before('[')
+		}
+	}
+	return k, index
+}
+
 // to_any converts the `Doc` to toml.Any type.
 pub fn (d Doc) to_any() Any {
-	return d.ast_to_any(d.ast.table)
+	return ast_to_any(d.ast.table)
+}
+
+// reflect returns `T` with `T.<field>`'s value set to the
+// value of any 1st level TOML key by the same name.
+pub fn (d Doc) reflect<T>() T {
+	return d.to_any().reflect<T>()
 }
 
 // value queries a value from the TOML document.
-// `key` should be in "dotted" form (`a.b.c`).
-// `key` supports quoted keys like `a."b.c"`.
+// `key` supports a small query syntax scheme:
+// Maps can be queried in "dotted" form e.g. `a.b.c`.
+// quoted keys are supported as `a."b.c"` or `a.'b.c'`.
+// Arrays can be queried with `a[0].b[1].[2]`.
 pub fn (d Doc) value(key string) Any {
-	values := d.ast.table as map[string]ast.Value
 	key_split := parse_dotted_key(key) or { return Any(Null{}) }
-	return d.value_(values, key_split)
+	return d.value_(d.ast.table, key_split)
 }
 
 // value_ returns the value found at `key` in the map `values` as `Any` type.
-fn (d Doc) value_(values map[string]ast.Value, key []string) Any {
-	value := values[key[0]] or {
-		return Any(Null{})
-		// TODO decide this
-		// panic(@MOD + '.' + @STRUCT + '.' + @FN + ' key "$key[0]" does not exist')
+fn (d Doc) value_(value ast.Value, key []string) Any {
+	assert key.len > 0
+	mut ast_value := ast.Value(ast.Null{})
+	k, index := parse_array_key(key[0])
+
+	if k == '' {
+		a := value as []ast.Value
+		ast_value = a[index] or { return Any(Null{}) }
 	}
-	// `match` isn't currently very suitable for these types of sum type constructs...
+
 	if value is map[string]ast.Value {
-		if key.len <= 1 {
-			return d.ast_to_any(value)
+		ast_value = value[k] or { return Any(Null{}) }
+		if index > -1 {
+			a := ast_value as []ast.Value
+			ast_value = a[index] or { return Any(Null{}) }
 		}
-		m := (value as map[string]ast.Value)
-		return d.value_(m, key[1..])
 	}
-	return d.ast_to_any(value)
+
+	if key.len <= 1 {
+		return ast_to_any(ast_value)
+	}
+	match ast_value {
+		map[string]ast.Value, []ast.Value {
+			return d.value_(ast_value, key[1..])
+		}
+		else {
+			return ast_to_any(value)
+		}
+	}
 }
 
 // ast_to_any converts `from` ast.Value to toml.Any value.
-pub fn (d Doc) ast_to_any(value ast.Value) Any {
+pub fn ast_to_any(value ast.Value) Any {
 	match value {
 		ast.Date {
 			return Any(Date{value.text})
@@ -199,11 +237,25 @@ pub fn (d Doc) ast_to_any(value ast.Value) Any {
 			return Any(value.text)
 		}
 		ast.Number {
-			if value.text.contains('.') || value.text.to_lower().contains('e') {
-				return Any(value.text.f64())
+			val_text := value.text
+			if val_text == 'inf' || val_text == '+inf' || val_text == '-inf' {
+				// NOTE values taken from strconv
+				if !val_text.starts_with('-') {
+					// strconv.double_plus_infinity
+					return Any(u64(0x7FF0000000000000))
+				} else {
+					// strconv.double_minus_infinity
+					return Any(u64(0xFFF0000000000000))
+				}
 			}
-			v := strconv.parse_int(value.text, 0, 0) or { i64(0) }
-			return Any(v)
+			if val_text == 'nan' || val_text == '+nan' || val_text == '-nan' {
+				return Any('nan')
+			}
+			if !val_text.starts_with('0x')
+				&& (val_text.contains('.') || val_text.to_lower().contains('e')) {
+				return Any(value.f64())
+			}
+			return Any(value.i64())
 		}
 		ast.Bool {
 			str := (value as ast.Bool).text
@@ -216,7 +268,7 @@ pub fn (d Doc) ast_to_any(value ast.Value) Any {
 			m := (value as map[string]ast.Value)
 			mut am := map[string]Any{}
 			for k, v in m {
-				am[k] = d.ast_to_any(v)
+				am[k] = ast_to_any(v)
 			}
 			return am
 			// return d.get_map_value(m, key_split[1..].join('.'))
@@ -225,7 +277,7 @@ pub fn (d Doc) ast_to_any(value ast.Value) Any {
 			a := (value as []ast.Value)
 			mut aa := []Any{}
 			for val in a {
-				aa << d.ast_to_any(val)
+				aa << ast_to_any(val)
 			}
 			return aa
 		}

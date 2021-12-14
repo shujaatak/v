@@ -8,6 +8,13 @@ pub mut:
 	will_read_frequently bool
 }
 
+pub fn (settings CanvasRenderingContext2DSettings) to_js() JS.Any {
+	mut object := JS.Any{}
+	#object = { alpha: settings.alpha, colorSpace: settings.color_space.str, desynchronized: settings.desynchronized.val, willReadFrequently: settings.will_read_frequently.val };
+
+	return object
+}
+
 pub interface JS.DOMMatrix2DInit {
 mut:
 	a JS.Number
@@ -168,9 +175,9 @@ pub struct JS.EventListenerOptions {
 }
 
 pub interface JS.EventTarget {
-	addEventListener(cb EventCallback, options JS.EventListenerOptions)
+	addEventListener(event JS.String, cb EventCallback, options JS.EventListenerOptions)
 	dispatchEvent(event JS.Event) JS.Boolean
-	removeEventListener(cb EventCallback, options JS.EventListenerOptions)
+	removeEventListener(event JS.String, cb EventCallback, options JS.EventListenerOptions)
 }
 
 // Event is an event which takes place in the DOM.
@@ -320,11 +327,25 @@ pub interface JS.Document {
 	lastModified JS.String
 	inputEncoding JS.String
 	implementation JS.DOMImplementation
+	doctype JS.DocumentType
+	embeds JS.HTMLCollection
+	forms JS.HTMLCollection
+	getElementById(id JS.String) ?JS.HTMLElement
 mut:
 	bgColor JS.String
+	fgColor JS.String
 	body JS.HTMLElement
 	cookie JS.String
 	domain JS.String
+	designMode JS.String
+	dir JS.String
+}
+
+pub fn document_url(doc JS.Document) JS.String {
+	mut url := JS.String{}
+	#url = doc.URL;
+
+	return url
 }
 
 pub interface JS.PointerEvent {
@@ -368,6 +389,14 @@ pub interface JS.Element {
 	scroll(x JS.Number, y JS.Number)
 	scrollBy(x JS.Number, y JS.Number)
 	toggleAttribute(qualifiedName JS.String, force JS.Boolean) JS.Boolean
+	getElementsByClassName(className JS.String) JS.HTMLCollection
+	getElementsByTagName(qualifiedName JS.String) JS.HTMLCollection
+	getEelementsByTagNameNS(namespaecURI JS.String, localName JS.String) JS.HTMLCollection
+	hasAttribute(qualifiedName JS.String) JS.Boolean
+	hasAttributeNS(namespace JS.String, localName JS.String) JS.Boolean
+	hasAttributes() JS.Boolean
+	hasPointerCapture(pointerId JS.Number) JS.Boolean
+	matches(selectors JS.String) JS.Boolean
 mut:
 	className JS.String
 	id JS.String
@@ -383,6 +412,13 @@ pub const (
 	document = JS.Document{}
 )
 
+pub fn window() JS.Window {
+	mut x := JS.Any(voidptr(0))
+	#x = window;
+
+	return x
+}
+
 fn init() {
 	#jsdom__document = document;
 }
@@ -397,4 +433,414 @@ pub fn event_listener(callback fn (JS.EventTarget, JS.Event)) EventCallback {
 		#target = this;
 		callback(target, event)
 	}
+}
+
+pub interface JS.HTMLCollection {
+	length JS.Number
+	item(idx JS.Number) ?JS.Any
+	namedItem(name JS.String) ?JS.Any
+}
+
+pub interface JS.HTMLElement {
+	JS.Element
+	accessKeyLabel JS.String
+	offsetHeight JS.Number
+	offsetLeft JS.Number
+	offsetParent JS.Any
+	offsetTop JS.Number
+	offsetWidth JS.Number
+	click()
+mut:
+	accessKey JS.String
+	autocapitalize JS.String
+	dir JS.String
+	draggable JS.Boolean
+	hidden JS.Boolean
+	innerText JS.String
+	lang JS.String
+	outerText JS.String
+	spellcheck JS.Boolean
+	title JS.String
+	translate JS.Boolean
+}
+
+pub fn JS.HTMLElement.prototype.constructor() JS.HTMLElement
+
+pub interface JS.HTMLEmbedElement {
+	getSVGDocument() ?JS.Document
+mut:
+	align JS.String
+	height JS.String
+	src JS.String
+	width JS.String
+}
+
+pub fn html_embed_type(embed JS.HTMLEmbedElement) JS.String {
+	mut str := JS.String{}
+	#str = embed.type
+
+	return str
+}
+
+pub fn JS.HTMLEmbedElement.prototype.constructor() JS.HTMLEmbedElement
+
+pub type CanvasContext = JS.CanvasRenderingContext2D
+	| JS.WebGL2RenderingContext
+	| JS.WebGLRenderingContext
+
+pub interface JS.HTMLCanvasElement {
+	JS.HTMLElement
+	getContext(contextId JS.String, options JS.Any) ?CanvasContext
+mut:
+	height JS.Number
+	width JS.Number
+}
+
+pub type FillStyle = JS.CanvasGradient | JS.CanvasPattern | JS.String
+
+pub interface JS.CanvasRenderingContext2D {
+	canvas JS.HTMLCanvasElement
+	beginPath()
+	clip(path JS.Path2D, fillRule JS.String)
+	fill(path JS.Path2D, fillRule JS.String)
+	isPointInPath(path JS.Path2D, x JS.Number, y JS.Number, fillRule JS.String) JS.Boolean
+	isPointInStroke(path JS.Path2D, x JS.Number, y JS.Number) JS.Boolean
+	stoke(path JS.Path2D)
+	createLinearGradient(x0 JS.Number, y0 JS.Number, x1 JS.Number, y1 JS.Number) JS.CanvasGradient
+	createRadialGradient(x0 JS.Number, y0 JS.Number, r0 JS.Number, x1 JS.Number, y1 JS.Number, r1 JS.Number) JS.CanvasGradient
+	createPattern(image JS.CanvasImageSource, repetition JS.String) ?JS.CanvasPattern
+	arc(x JS.Number, y JS.Number, radius JS.Number, startAngle JS.Number, endAngle JS.Number, counterclockwise JS.Boolean)
+	arcTo(x1 JS.Number, y1 JS.Number, x2 JS.Number, y2 JS.Number, radius JS.Number)
+	bezierCurveTo(cp1x JS.Number, cp1y JS.Number, cp2x JS.Number, cp2y JS.Number, x JS.Number, y JS.Number)
+	closePath()
+	ellipse(x JS.Number, y JS.Number, radiusX JS.Number, radiusY JS.Number, rotation JS.Number, startAngle JS.Number, endAngle JS.Number, counterclockwise JS.Boolean)
+	lineTo(x JS.Number, y JS.Number)
+	moveTo(x JS.Number, y JS.Number)
+	quadraticCurveTo(cpx JS.Number, cpy JS.Number, x JS.Number, y JS.Number)
+	rect(x JS.Number, y JS.Number, w JS.Number, h JS.Number)
+	getLineDash() JS.Array
+	setLineDash(segments JS.Array)
+	clearRect(x JS.Number, y JS.Number, w JS.Number, h JS.Number)
+	fillRect(x JS.Number, y JS.Number, w JS.null, h JS.Number)
+	strokeRect(x JS.Number, y JS.Number, w JS.Number, h JS.Number)
+	getTransformt() JS.DOMMatrix
+	resetTransform()
+	rotate(angle JS.Number)
+	scale(x JS.Number, y JS.Number)
+	setTransform(matrix JS.DOMMatrix)
+	transform(a JS.Number, b JS.Number, c JS.Number, d JS.Number, e JS.Number, f JS.Number)
+	translate(x JS.Number, y JS.Number)
+	drawFocusIfNeeded(path JS.Path2D, element JS.Element)
+	stroke()
+mut:
+	lineCap JS.String
+	lineDashOffset JS.Number
+	lineJoin JS.String
+	lineWidth JS.Number
+	miterLimit JS.Number
+	fillStyle FillStyle
+	strokeStyle FillStyle
+	globalAlpha JS.Number
+	globalCompositeOperation JS.String
+}
+
+pub interface JS.CanvasGradient {
+	addColorStop(offset JS.Number, color JS.String)
+}
+
+pub interface JS.CanvasPattern {
+	setTransform(transform JS.DOMMatrix)
+}
+
+pub type OnDeviceMotion = fn (ev JS.DeviceMotionEvent) JS.Any
+
+pub type OnDeviceOrientation = fn (ev JS.DeviceOrientationEvent) JS.Any
+
+pub fn on_device_motion(cb fn (win JS.Window, ev JS.DeviceMotionEvent) JS.Any) OnDeviceMotion {
+	clos := fn [cb] (ev JS.DeviceMotionEvent) JS.Any {
+		mut win := JS.Any(voidptr(0))
+		#win = this;
+
+		return cb(win, ev)
+	}
+	return clos
+}
+
+pub fn on_device_orientation(cb fn (win JS.Window, ev JS.DeviceOrientationEvent) JS.Any) OnDeviceOrientation {
+	clos := fn [cb] (ev JS.DeviceOrientationEvent) JS.Any {
+		mut win := JS.Any(voidptr(0))
+		#win = this;
+
+		return cb(win, ev)
+	}
+	return clos
+}
+
+pub type AnimationFrameCallback = fn (JS.Number)
+
+pub interface JS.Window {
+	JS.EventTarget
+	closed JS.Boolean
+	devicePixelRatio JS.Number
+	document JS.Document
+	frameElement JS.Element
+	innerHeight JS.Number
+	innerWidth JS.Number
+	length JS.Number
+	outerHeight JS.Number
+	outerWidth JS.Number
+	screenLeft JS.Number
+	screenTop JS.Number
+	screenX JS.Number
+	screenY JS.Number
+	scrollX JS.Number
+	scrollY JS.Number
+	alert(message JS.Any)
+	blur()
+	cancelIdleCallback(handle JS.Number)
+	captureEvents()
+	close()
+	confirm(message JS.String) JS.Boolean
+	focus()
+	moveBy(x JS.Number, y JS.Number)
+	moveTo(x JS.Number, y JS.Number)
+	print()
+	prompt(message JS.String, default_ JS.String) ?JS.String
+	stop()
+	resizeBy(x JS.Number, y JS.Number)
+	resizeTo(width JS.Number, height JS.Number)
+	scroll(x JS.Number, y JS.Number)
+	scrollBy(x JS.Number, y JS.Number)
+	scrollTo(x JS.Number, y JS.Number)
+	requestAnimationFrame(callback AnimationFrameCallback)
+mut:
+	name string
+	opener JS.Any
+	ondevicemotion OnDeviceMotion
+	ondeviceorientation OnDeviceOrientation
+}
+
+pub interface JS.Path2D {}
+
+pub struct JS.DeviceMotionEventAcceleration {
+	x JS.Number
+	y JS.Number
+	z JS.Number
+}
+
+pub struct JS.DeviceMotionEventRotationRate {
+	alpha JS.Number
+	beta  JS.Number
+	gamma JS.Number
+}
+
+pub interface JS.DeviceMotionEvent {
+	JS.Event
+	interval JS.Number
+	acceleration JS.DeviceMotionEventAcceleration
+	accelerationIncludingGravity JS.DeviceMotionEventAcceleration
+	rotationRate JS.DeviceMotionEventRotationRate
+}
+
+pub interface JS.DeviceOrientationEvent {
+	JS.Event
+	absolute JS.Boolean
+	alpha JS.Number
+	beta JS.Number
+	gamma JS.Number
+}
+
+pub interface JS.DocumentType {
+	JS.Node
+	JS.ChildNode
+	name JS.String
+	ownerDocument JS.Document
+	publicId JS.String
+	systemId JS.String
+}
+
+[single_impl]
+pub interface JS.WebGLProgram {}
+
+[single_impl]
+pub interface JS.WebGLShader {}
+
+[single_impl]
+pub interface JS.WebGLBuffer {}
+
+[single_impl]
+pub interface JS.WebGLFramebuffer {}
+
+[single_impl]
+pub interface JS.WebGLRenderbuffer {}
+
+[single_impl]
+pub interface JS.WebGLTexture {}
+
+[single_impl]
+pub interface JS.WebGLUniformLocation {}
+
+[single_impl]
+pub interface JS.WebGLVertexArrayObject {}
+
+pub interface JS.WebGLRenderingContext {
+	canvas JS.HTMLCanvasElement
+	drawingBufferHeight JS.Number
+	drawingBufferWidth JS.Number
+	activeTexture(texture JS.Number)
+	attachShader(program JS.WebGLProgram, shader JS.WebGLProgram)
+	linkProgram(program JS.WebGLProgram)
+	bindAttribLocation(program JS.WebGLProgram, index JS.Number, name JS.String)
+	bindBuffer(target JS.Number, buffer JS.WebGLBuffer)
+	bindFramebuffer(target JS.Number, buffer JS.WebGLFrameBuffer)
+	bindRenderbuffer(target JS.Number, renderbuffer JS.WebGLRenderbuffer)
+	bindTexture(target JS.Number, texture JS.WebGLTexture)
+	clear(mask JS.Number)
+	clearColor(red JS.Number, green JS.Number, blue JS.Number, alpha JS.Number)
+	clearDepth(depth JS.Number)
+	clearStencil(s JS.Number)
+	colorMask(red JS.Boolean, green JS.Boolean, blue JS.Boolean, alpha JS.Boolean)
+	compileShader(shader JS.WebGLShader)
+	createBuffer() ?JS.WebGLBuffer
+	createFramebuffer() ?JS.WebGLFrameBuffer
+	createProgram() ?JS.WebGLProgram
+	createRenderbuffer() ?JS.WebGLRenderbuffer
+	createShader(typ JS.Number) ?JS.WebGLShader
+	createTexture() ?JS.WebGLTexture
+	cullFace(mode JS.Number)
+	deleteBuffer(buffer JS.WebGLBuffer)
+	deleteFramebuffer(buffer JS.WebGLFrameBuffer)
+	deleteProgram(program JS.WebGLProgram)
+	deleteRenderbuffer(buffer JS.WebGLRenderbuffer)
+	deleteShader(shader JS.WebGLShader)
+	deleteTexture(texture JS.WebGLTexture)
+	depthFunc(func JS.Number)
+	depthMask(flag JS.Boolean)
+	depthRange(zNear JS.Number, zFar JS.Number)
+	detachShader(program JS.WebGLProgram, shader JS.WebGLShader)
+	disable(cap JS.Number)
+	disableVertexAttribArray(index JS.Number)
+	drawArrays(mode JS.Number, first JS.Number, count JS.Number)
+	drawElements(mode JS.Number, count JS.Number, typ JS.Number, offset JS.Number)
+	enable(cap JS.Number)
+	enableVertexAttribArray(index JS.Number)
+	finish()
+	flush()
+	framebufferRenderbuffer(target JS.Number, attachment JS.Number, renderbuffertarget JS.Number, renderbuffer JS.WebGLRenderbuffer)
+	framebufferTexture2D(target JS.Number, attachment JS.Number, textarget JS.Number, texture JS.WebGLTexture, level JS.Number)
+	frontFace(mode JS.Number)
+	generateMipmap(target JS.Number)
+	getError() JS.Number
+	getExtension(name JS.String) JS.Any
+	getParameter(name JS.Number) JS.Any
+	getProgramParameter(program JS.WebGLProgram, pname JS.Number) JS.Any
+	getShaderSource(shader JS.WebGLShader) ?JS.String
+	bufferData(target JS.Number, data JS.TypedArray, usage JS.Number)
+	shaderSource(shader JS.WebGLShader, source JS.String)
+	getShaderParameter(shader JS.WebGLShader, pname JS.Number) JS.Any
+	vertexAttribPointer(index JS.Number, size JS.Number, typ JS.Number, normalized JS.Boolean, stride JS.Number, offset JS.Number)
+	getAttribLocation(program JS.WebGLProgram, name JS.String) JS.Number
+	useProgram(program JS.WebGLProgram)
+	getUniformLocation(program JS.WebGLProgram, name JS.String) ?JS.WebGLUniformLocation
+	uniformMatrix2fv(location JS.WebGLUniformLocation, transpose JS.Boolean, value JS.Array)
+	uniformMatrix3fv(location JS.WebGLUniformLocation, transpose JS.Boolean, value JS.Array)
+	uniformMatrix4fv(location JS.WebGLUniformLocation, transpose JS.Boolean, value JS.Array)
+	getProgramInfoLog(program JS.WebGLProgram) JS.String
+	getShaderInfoLog(shader JS.WebGLShader) JS.String
+	viewport(x JS.Number, y JS.Number, width JS.Number, height JS.Number)
+}
+
+pub interface JS.WebGL2RenderingContext {
+	JS.WebGLRenderingContext
+}
+
+pub fn gl_vertex_shader() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.VERTEX_SHADER;
+
+	return num
+}
+
+pub fn gl_fragment_shader() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.FRAGMENT_SHADER;
+
+	return num
+}
+
+pub fn gl_element_array_buffer() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.ELEMENT_ARRAY_BUFFER;
+
+	return num
+}
+
+pub fn gl_array_buffer() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.ARRAY_BUFFER;
+
+	return num
+}
+
+pub fn gl_color_buffer_bit() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.COLOR_BUFFER_BIT;
+
+	return num
+}
+
+pub fn gl_depth_buffer_bit() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.COLOR_BUFFER_BIT;
+
+	return num
+}
+
+pub fn gl_triangles() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.TRIANGLES;
+
+	return num
+}
+
+pub fn gl_unsigned_short() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.UNSIGNED_SHORT;
+
+	return num
+}
+
+pub fn gl_static_draw() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.STATIC_DRAW;
+
+	return num
+}
+
+pub fn gl_link_status() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.LINK_STATUS;
+
+	return num
+}
+
+pub fn gl_compile_status() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.COMPILE_STATUS;
+
+	return num
+}
+
+pub fn gl_float() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.FLOAT;
+
+	return num
+}
+
+pub fn gl_depth_test() JS.Number {
+	mut num := JS.Number{}
+	#num = WebGLRenderingContext.DEPTH_TEST;
+
+	return num
 }

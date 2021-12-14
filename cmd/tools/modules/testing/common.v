@@ -19,6 +19,10 @@ pub const hide_oks = os.getenv('VTEST_HIDE_OK') == '1'
 
 pub const fail_fast = os.getenv('VTEST_FAIL_FAST') == '1'
 
+pub const is_node_present = os.execute('node --version').exit_code == 0
+
+pub const all_processes = os.execute('ps ax').output.split_any('\r\n')
+
 pub struct TestSession {
 pub mut:
 	files         []string
@@ -309,7 +313,7 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 	} else {
 		fname.replace('.v', '')
 	}
-	generated_binary_fpath := os.join_path(tmpd, generated_binary_fname)
+	generated_binary_fpath := os.join_path_single(tmpd, generated_binary_fname)
 	if os.exists(generated_binary_fpath) {
 		if ts.rm_binaries {
 			os.rm(generated_binary_fpath) or {}
@@ -406,15 +410,11 @@ fn worker_trunner(mut p pool.PoolProcessor, idx int, thread_id int) voidptr {
 }
 
 pub fn vlib_should_be_present(parent_dir string) {
-	vlib_dir := os.join_path(parent_dir, 'vlib')
+	vlib_dir := os.join_path_single(parent_dir, 'vlib')
 	if !os.is_dir(vlib_dir) {
 		eprintln('$vlib_dir is missing, it must be next to the V executable')
 		exit(1)
 	}
-}
-
-pub fn v_build_failing(zargs string, folder string) bool {
-	return v_build_failing_skipped(zargs, folder, [])
 }
 
 pub fn prepare_test_session(zargs string, folder string, oskipped []string, main_label string) TestSession {
@@ -427,7 +427,7 @@ pub fn prepare_test_session(zargs string, folder string, oskipped []string, main
 		eprintln('v compiler args: "$vargs"')
 	}
 	mut session := new_test_session(vargs, true)
-	files := os.walk_ext(os.join_path(parent_dir, folder), '.v')
+	files := os.walk_ext(os.join_path_single(parent_dir, folder), '.v')
 	mut mains := []string{}
 	mut skipped := oskipped.clone()
 	next_file: for f in files {
@@ -451,7 +451,7 @@ pub fn prepare_test_session(zargs string, folder string, oskipped []string, main
 		maxc := if c.len > 300 { 300 } else { c.len }
 		start := c[0..maxc]
 		if start.contains('module ') && !start.contains('module main') {
-			skipped_f := f.replace(os.join_path(parent_dir, ''), '')
+			skipped_f := f.replace(os.join_path_single(parent_dir, ''), '')
 			skipped << skipped_f
 		}
 		for skip_prefix in oskipped {
@@ -466,10 +466,13 @@ pub fn prepare_test_session(zargs string, folder string, oskipped []string, main
 	return session
 }
 
-pub fn v_build_failing_skipped(zargs string, folder string, oskipped []string) bool {
+pub type FnTestSetupCb = fn (mut session TestSession)
+
+pub fn v_build_failing_skipped(zargs string, folder string, oskipped []string, cb FnTestSetupCb) bool {
 	main_label := 'Building $folder ...'
 	finish_label := 'building $folder'
 	mut session := prepare_test_session(zargs, folder, oskipped, main_label)
+	cb(mut session)
 	session.test()
 	eprintln(session.benchmark.total_message(finish_label))
 	return session.failed
@@ -550,4 +553,13 @@ pub fn get_test_details(file string) TestDetails {
 		}
 	}
 	return res
+}
+
+pub fn find_started_process(pname string) ?string {
+	for line in testing.all_processes {
+		if line.contains(pname) {
+			return line
+		}
+	}
+	return error('could not find process matching $pname')
 }

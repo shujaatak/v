@@ -1,47 +1,21 @@
 import os
 import toml
 import toml.ast
-import toml.scanner
 import x.json2
-import strconv
 
 // Instructions for developers:
 // The actual tests and data can be obtained by doing:
 // `cd vlib/toml/tests/testdata`
 // `git clone --depth 1 https://github.com/BurntSushi/toml-test.git burntsushi/toml-test`
 // See also the CI toml tests
-// TODO Goal: make value retrieval of all of https://github.com/BurntSushi/toml-test/test/ pass
 const (
 	// Kept for easier handling of future updates to the tests
 	valid_exceptions       = []string{}
 	invalid_exceptions     = []string{}
 
-	valid_value_exceptions = [
-		// String
-		'string/escapes.toml',
-		'string/escape-tricky.toml',
-		'string/multiline.toml',
-		// Integer
-		'integer/literals.toml',
-		'integer/long.toml',
-		// Float
-		'float/exponent.toml',
-		'float/underscore.toml',
-		'float/inf-and-nan.toml',
-		// Comment
-		'comment/tricky.toml',
-		// Table
-		'table/array-implicit.toml',
-		'table/names.toml',
-		// Date-time
-		'datetime/milliseconds.toml',
-		// Inline-table
-		'inline-table/multiline.toml',
-		// Key
-		'key/numeric-dotted.toml',
-		'key/alphanum.toml',
-		'key/escapes.toml',
-	]
+	valid_value_exceptions = []string{}
+	// BUG with string interpolation of '${i64(-9223372036854775808)}') see below for workaround
+	//'integer/long.toml', // TODO https://github.com/vlang/v/issues/9507
 
 	jq                     = os.find_abs_path_of_executable('jq') or { '' }
 	compare_work_dir_root  = os.join_path(os.temp_dir(), 'v', 'toml', 'burntsushi')
@@ -161,7 +135,6 @@ fn test_burnt_sushi_tomltest() {
 			}
 		}
 
-		// TODO test cases where the parser should fail
 		invalid_test_files := os.walk_ext(os.join_path(test_root, 'invalid'), '.toml')
 		println('Testing $invalid_test_files.len invalid TOML files...')
 		mut invalid := 0
@@ -204,13 +177,7 @@ fn test_burnt_sushi_tomltest() {
 fn to_burntsushi(value ast.Value) string {
 	match value {
 		ast.Quoted {
-			mut json_text := ''
-			if value.quote == `"` {
-				json_text = toml_to_json_escapes(value) or { '<error>' }
-			} else {
-				json_text = json2.Any(value.text).json_str()
-			}
-
+			json_text := json2.Any(value.text).json_str()
 			return '{ "type": "string", "value": "$json_text" }'
 		}
 		ast.DateTime {
@@ -241,12 +208,23 @@ fn to_burntsushi(value ast.Value) string {
 			return '{ "type": "null", "value": "$json_text" }'
 		}
 		ast.Number {
-			if value.text.contains('.') || value.text.to_lower().contains('e') {
-				json_text := value.text.f64()
-				return '{ "type": "float", "value": "$json_text" }'
+			if value.text.contains('inf') || value.text.contains('nan') {
+				return '{ "type": "float", "value": "$value.text" }'
 			}
-			i64_ := strconv.parse_int(value.text, 0, 0) or { i64(0) }
-			return '{ "type": "integer", "value": "$i64_" }'
+			if !value.text.starts_with('0x')
+				&& (value.text.contains('.') || value.text.to_lower().contains('e')) {
+				mut val := '$value.f64()'.replace('.e+', '.0e') // json notation
+				if !val.contains('.') && val != '0' { // json notation
+					val += '.0'
+				}
+				return '{ "type": "float", "value": "$val" }'
+			}
+			v := value.i64()
+			// TODO workaround https://github.com/vlang/v/issues/9507
+			if v == i64(-9223372036854775807 - 1) {
+				return '{ "type": "integer", "value": "-9223372036854775808" }'
+			}
+			return '{ "type": "integer", "value": "$v" }'
 		}
 		map[string]ast.Value {
 			mut str := '{ '
@@ -269,50 +247,4 @@ fn to_burntsushi(value ast.Value) string {
 		}
 	}
 	return '<error>'
-}
-
-// toml_to_json_escapes is a utility function for normalizing
-// TOML basic string to JSON string
-fn toml_to_json_escapes(q ast.Quoted) ?string {
-	mut s := scanner.new_simple(q.text) ?
-	mut r := ''
-	for {
-		ch := s.next()
-		if ch == scanner.end_of_text {
-			break
-		}
-		ch_byte := byte(ch)
-
-		if ch == `"` {
-			if byte(s.peek(-1)) != `\\` {
-				r += '\\'
-			}
-		}
-
-		if ch == `\\` {
-			next_ch := byte(s.at())
-
-			escape := ch_byte.ascii_str() + next_ch.ascii_str()
-			if escape.to_lower() == '\\u' {
-				mut b := s.next()
-				mut unicode_point := ''
-				for {
-					b = s.next()
-					if b != ` ` && b != scanner.end_of_text {
-						unicode_point += byte(b).ascii_str()
-					} else {
-						break
-					}
-				}
-				if unicode_point.len < 8 {
-					unicode_point = '0'.repeat(8 - unicode_point.len) + unicode_point
-				}
-				rn := rune(strconv.parse_int(unicode_point, 16, 0) ?)
-				r += '$rn'
-				continue
-			}
-		}
-		r += ch_byte.ascii_str()
-	}
-	return r
 }

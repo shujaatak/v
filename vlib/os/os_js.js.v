@@ -125,3 +125,18 @@ pub fn getwd() string {
 
 	return res
 }
+
+pub fn getuid() int {
+	res := 0
+	#if (process.getuid) res.val = process.getuid();
+
+	return res
+}
+
+pub fn execvp(cmd string, args []string) ? {
+	panic('os.execvp() is not available on JS backend')
+}
+
+pub fn stdin_resume() {
+	#$process.stdin.resume();
+}

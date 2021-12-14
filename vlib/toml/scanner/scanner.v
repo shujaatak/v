@@ -9,9 +9,10 @@ import toml.input
 import toml.token
 import toml.util
 
-pub const digit_extras = [`_`, `.`, `x`, `o`, `b`, `e`, `E`]
-
-const end_of_text = -1
+pub const (
+	digit_extras = [`_`, `.`, `x`, `o`, `b`, `e`, `E`]
+	end_of_text  = -1
+)
 
 // Scanner contains the necessary fields for the state of the scan process.
 // the task the scanner does is also refered to as "lexing" or "tokenizing".
@@ -25,6 +26,8 @@ mut:
 	line_nr    int = 1 // current line number (y coordinate)
 	pos        int // current flat/index position in the `text` field
 	header_len int // Length, how many bytes of header was found
+	// Quirks
+	is_left_of_assign bool = true // indicates if the scanner is on the *left* side of an assignment
 }
 
 // State is a read-only copy of the scanner's internal state.
@@ -90,22 +93,29 @@ pub fn (mut s Scanner) scan() ?token.Token {
 		ascii := byte_c.ascii_str()
 		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'current char "$ascii"')
 
-		is_sign := byte_c in [`+`, `-`]
-		is_signed_number := is_sign && byte(s.at()).is_digit() && !byte(s.peek(-1)).is_digit()
+		if byte_c == byte(0x0) {
+			s.reset()
+			return error(@MOD + '.' + @STRUCT + '.' + @FN +
+				' NULL control character `$c.hex()` is not allowed at ($s.line_nr,$s.col) "$ascii" near ...${s.excerpt(s.pos, 5)}...')
+		}
+
+		is_sign := c == `+` || c == `-`
 
 		// (+/-)nan & (+/-)inf
-		is_nan := byte_c == `n` && s.at() == `a` && s.peek(1) == `n` && s.peek(2) == `\n`
-		is_inf := byte_c == `i` && s.at() == `n` && s.peek(1) == `f` && s.peek(2) == `\n`
-		is_signed_nan := is_sign && s.at() == `n` && s.peek(1) == `a` && s.peek(2) == `n`
-			&& s.peek(3) == `\n`
-		is_signed_inf := is_sign && s.at() == `i` && s.peek(1) == `n` && s.peek(2) == `f`
-			&& s.peek(3) == `\n`
-		if is_nan || is_inf || is_signed_nan || is_signed_inf {
+		peek_1 := s.peek(1)
+		peek_2 := s.peek(2)
+		is_nan := c == `n` && s.at() == `a` && peek_1 == `n`
+		is_inf := !is_nan && c == `i` && s.at() == `n` && peek_1 == `f`
+		is_signed_nan := is_sign && s.at() == `n` && peek_1 == `a` && peek_2 == `n`
+		is_signed_inf := !is_signed_nan && is_sign && s.at() == `i` && peek_1 == `n`
+			&& peek_2 == `f`
+		if !s.is_left_of_assign && (is_nan || is_inf || is_signed_nan || is_signed_inf) {
 			num := s.extract_nan_or_inf_number() ?
 			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified a special number "$num" ($num.len)')
 			return s.new_token(.number, num, num.len)
 		}
 
+		is_signed_number := is_sign && byte(s.at()).is_digit() && !byte(s.peek(-1)).is_digit()
 		is_digit := byte_c.is_digit()
 		if is_digit || is_signed_number {
 			num := s.extract_number() ?
@@ -115,7 +125,7 @@ pub fn (mut s Scanner) scan() ?token.Token {
 
 		if util.is_key_char(byte_c) {
 			key := s.extract_key()
-			if key.to_lower() in ['true', 'false'] {
+			if !s.is_left_of_assign && (key == 'true' || key == 'false') {
 				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified a boolean "$key" ($key.len)')
 				return s.new_token(.boolean, key, key.len)
 			}
@@ -165,6 +175,7 @@ pub fn (mut s Scanner) scan() ?token.Token {
 				return s.new_token(.plus, ascii, ascii.len)
 			}
 			`=` {
+				s.is_left_of_assign = false
 				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified assignment "$ascii" ($ascii.len)')
 				return s.new_token(.assign, ascii, ascii.len)
 			}
@@ -334,7 +345,7 @@ fn (mut s Scanner) ignore_line() ?string {
 		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'skipping "${byte(c).ascii_str()} / $c"')
 		if s.at_crlf() {
 			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'letting `\\r\\n` slip through')
-			return s.text[start..s.pos]
+			return s.text[start..s.pos + 1]
 		}
 	}
 	return s.text[start..s.pos]
@@ -345,6 +356,7 @@ fn (mut s Scanner) ignore_line() ?string {
 fn (mut s Scanner) inc_line_number() {
 	s.col = 0
 	s.line_nr++
+	s.is_left_of_assign = true
 }
 
 // extract_key parses and returns a TOML key as a string.
@@ -568,7 +580,8 @@ fn (mut s Scanner) extract_number() ?string {
 			s.col += 2
 		}
 		c = s.at()
-		if !(byte(c).is_hex_digit() || c in scanner.digit_extras) {
+		if !(byte(c).is_hex_digit() || c in scanner.digit_extras)
+			|| (c == `.` && s.is_left_of_assign) {
 			break
 		}
 		s.pos++

@@ -26,10 +26,10 @@ pub fn (a Any) string() string {
 		// ... certain call-patterns to this function will cause a memory corruption.
 		// See `tests/toml_memory_corruption_test.v` for a matching regression test.
 		string { return (a as string).clone() }
-		DateTime { return a.str() }
-		Date { return a.str() }
-		Time { return a.str() }
-		else { return a.str() }
+		DateTime { return a.str().clone() }
+		Date { return a.str().clone() }
+		Time { return a.str().clone() }
+		else { return a.str().clone() }
 	}
 }
 
@@ -126,7 +126,8 @@ pub fn (a Any) bool() bool {
 pub fn (a Any) date() Date {
 	match a {
 		// string {  } // TODO
-		Date { return a }
+		// NOTE `.clone()` is to avoid memory corruption see `pub fn (a Any) string() string`
+		Date { return Date{a.str().clone()} }
 		else { return Date{''} }
 	}
 }
@@ -135,7 +136,8 @@ pub fn (a Any) date() Date {
 pub fn (a Any) time() Time {
 	match a {
 		// string {  } // TODO
-		Time { return a }
+		// NOTE `.clone()` is to avoid memory corruption see `pub fn (a Any) string() string`
+		Time { return Time{a.str().clone()} }
 		else { return Time{''} }
 	}
 }
@@ -144,38 +146,130 @@ pub fn (a Any) time() Time {
 pub fn (a Any) datetime() DateTime {
 	match a {
 		// string {  } // TODO
-		DateTime { return a }
+		// NOTE `.clone()` is to avoid memory corruption see `pub fn (a Any) string() string`
+		DateTime { return DateTime{a.str().clone()} }
 		else { return DateTime{''} }
 	}
 }
 
+// default_to returns `value` if `a Any` is `Null`.
+// This can be used to set default values when retrieving
+// values. E.g.: `toml_doc.value('wrong.key').default_to(123).int()`
+pub fn (a Any) default_to(value Any) Any {
+	match a {
+		Null { return value }
+		else { return a }
+	}
+}
+
 // value queries a value from the map.
-// `key` should be in "dotted" form (`a.b.c`).
-// `key` supports quoted keys like `a."b.c"`.
-pub fn (m map[string]Any) value(key string) ?Any {
-	key_split := parse_dotted_key(key) ?
-	return m.value_(key_split)
+// `key` supports a small query syntax scheme:
+// Maps can be queried in "dotted" form e.g. `a.b.c`.
+// quoted keys are supported as `a."b.c"` or `a.'b.c'`.
+// Arrays can be queried with `a[0].b[1].[2]`.
+pub fn (m map[string]Any) value(key string) Any {
+	return Any(m).value(key)
 }
 
-fn (m map[string]Any) value_(key []string) ?Any {
-	value := m[key[0]] or {
-		return error(@MOD + '.' + @STRUCT + '.' + @FN + ' key "${key[0]}" does not exist')
+// as_strings returns the contents of the map
+// as `map[string]string`
+pub fn (m map[string]Any) as_strings() map[string]string {
+	mut result := map[string]string{}
+	for k, v in m {
+		result[k] = v.string()
 	}
-	// `match` isn't currently very suitable for these types of sum type constructs...
-	if value is map[string]Any {
-		if key.len <= 1 {
-			return value
-		}
-		nm := (value as map[string]Any)
-		return nm.value_(key[1..])
-	}
-	return value
+	return result
 }
 
+// value queries a value from the array.
+// `key` supports a small query syntax scheme:
+// The array can be queried with `[0].b[1].[2]`.
+// Maps can be queried in "dotted" form e.g. `a.b.c`.
+// quoted keys are supported as `a."b.c"` or `a.'b.c'`.
+pub fn (a []Any) value(key string) Any {
+	return Any(a).value(key)
+}
+
+// as_strings returns the contents of the array
+// as `[]string`
 pub fn (a []Any) as_strings() []string {
 	mut sa := []string{}
 	for any in a {
 		sa << any.string()
 	}
 	return sa
+}
+
+// value queries a value from the `Any` type.
+// `key` supports a small query syntax scheme:
+// Maps can be queried in "dotted" form e.g. `a.b.c`.
+// quoted keys are supported as `a."b.c"` or `a.'b.c'`.
+// Arrays can be queried with `a[0].b[1].[2]`.
+pub fn (a Any) value(key string) Any {
+	key_split := parse_dotted_key(key) or { return Any(Null{}) }
+	return a.value_(a, key_split)
+}
+
+// value_ returns the `Any` value found at `key`.
+fn (a Any) value_(value Any, key []string) Any {
+	assert key.len > 0
+	mut any_value := Any(Null{})
+	k, index := parse_array_key(key[0])
+	if k == '' {
+		arr := value as []Any
+		any_value = arr[index] or { return Any(Null{}) }
+	}
+	if value is map[string]Any {
+		any_value = value[k] or { return Any(Null{}) }
+		if index > -1 {
+			arr := any_value as []Any
+			any_value = arr[index] or { return Any(Null{}) }
+		}
+	}
+	if key.len <= 1 {
+		return any_value
+	}
+	match any_value {
+		map[string]Any, []Any {
+			return a.value_(any_value, key[1..])
+		}
+		else {
+			return value
+		}
+	}
+}
+
+// reflect returns `T` with `T.<field>`'s value set to the
+// value of any 1st level TOML key by the same name.
+pub fn (a Any) reflect<T>() T {
+	mut reflected := T{}
+	$for field in T.fields {
+		$if field.typ is string {
+			reflected.$(field.name) = a.value(field.name).default_to('').string()
+		} $else $if field.typ is bool {
+			reflected.$(field.name) = a.value(field.name).default_to(false).bool()
+		} $else $if field.typ is int {
+			reflected.$(field.name) = a.value(field.name).default_to(0).int()
+		} $else $if field.typ is f32 {
+			reflected.$(field.name) = a.value(field.name).default_to(0.0).f32()
+		} $else $if field.typ is f64 {
+			reflected.$(field.name) = a.value(field.name).default_to(0.0).f64()
+		} $else $if field.typ is i64 {
+			reflected.$(field.name) = a.value(field.name).default_to(0).i64()
+		} $else $if field.typ is u64 {
+			reflected.$(field.name) = a.value(field.name).default_to(0).u64()
+		} $else $if field.typ is Any {
+			reflected.$(field.name) = a.value(field.name)
+		} $else $if field.typ is DateTime {
+			dt := DateTime{'0000-00-00T00:00:00.000'}
+			reflected.$(field.name) = a.value(field.name).default_to(dt).datetime()
+		} $else $if field.typ is Date {
+			da := Date{'0000-00-00'}
+			reflected.$(field.name) = a.value(field.name).default_to(da).date()
+		} $else $if field.typ is Time {
+			t := Time{'00:00:00.000'}
+			reflected.$(field.name) = a.value(field.name).default_to(t).time()
+		}
+	}
+	return reflected
 }

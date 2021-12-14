@@ -170,6 +170,8 @@ const c_common_macros = '
 #endif
 #ifdef __clang__
 	#undef __V_GCC__
+	#undef EMPTY_STRUCT_INITIALIZATION
+	#define EMPTY_STRUCT_INITIALIZATION 0
 #endif
 #ifdef _MSC_VER
 	#undef __V_GCC__
@@ -252,6 +254,15 @@ const c_common_macros = '
 // tcc does not support has_include properly yet, turn it off completely
 #if defined(__TINYC__) && defined(__has_include)
 #undef __has_include
+#endif
+
+
+#if !defined(VWEAK)
+	#define VWEAK __attribute__((weak))
+	#ifdef _MSC_VER
+		#undef VWEAK
+		#define VWEAK
+	#endif
 #endif
 
 #if !defined(VNORETURN)
@@ -533,7 +544,11 @@ typedef struct sync__Channel* chan;
 
 #ifndef __cplusplus
 	#ifndef bool
-		typedef byte bool;
+		#ifdef CUSTOM_DEFINE_4bytebool
+			typedef int bool;
+		#else
+			typedef byte bool;
+		#endif
 		#define true 1
 		#define false 0
 	#endif

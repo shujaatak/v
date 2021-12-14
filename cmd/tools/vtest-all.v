@@ -71,6 +71,29 @@ fn get_all_commands() []Command {
 			line: '$vexe run examples/v_script.vsh > /dev/null'
 			okmsg: 'V can run the .VSH script file examples/v_script.vsh'
 		}
+		$if linux {
+			res << Command{
+				line: '$vexe -b native run examples/native/hello_world.v > /dev/null'
+				okmsg: 'V compiles and runs examples/native/hello_world.v on the native backend for linux'
+			}
+		}
+		// only compilation:
+		res << Command{
+			line: '$vexe -os linux -b native -o hw.linux examples/hello_world.v'
+			okmsg: 'V compiles hello_world.v on the native backend for linux'
+			rmfile: 'hw.linux'
+		}
+		res << Command{
+			line: '$vexe -os macos -b native -o hw.macos examples/hello_world.v'
+			okmsg: 'V compiles hello_world.v on the native backend for macos'
+			rmfile: 'hw.macos'
+		}
+		res << Command{
+			line: '$vexe -os windows -b native -o hw.exe examples/hello_world.v'
+			okmsg: 'V compiles hello_world.v on the native backend for windows'
+			rmfile: 'hw.exe'
+		}
+		//
 		res << Command{
 			line: '$vexe -b js -o hw.js examples/hello_world.v'
 			okmsg: 'V compiles hello_world.v on the JS backend'
@@ -158,7 +181,7 @@ fn get_all_commands() []Command {
 	}
 	$if macos || linux {
 		res << Command{
-			line: '$vexe -o v.c cmd/v && cc -Werror -I "$vroot/thirdparty/stdatomic/nix" v.c -lpthread && rm -rf a.out'
+			line: '$vexe -o v.c cmd/v && cc -Werror -I "$vroot/thirdparty/stdatomic/nix" v.c -lpthread -lm && rm -rf a.out'
 			label: 'v.c should be buildable with no warnings...'
 			okmsg: 'v.c can be compiled without warnings. This is good :)'
 			rmfile: 'v.c'

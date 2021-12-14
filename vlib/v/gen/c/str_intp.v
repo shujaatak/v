@@ -125,7 +125,8 @@ fn (mut g Gen) str_val(node ast.StringInterLiteral, i int) {
 	expr := node.exprs[i]
 
 	typ := g.unwrap_generic(node.expr_types[i])
-	if typ == ast.string_type {
+	typ_sym := g.table.get_type_symbol(typ)
+	if typ == ast.string_type && g.comptime_for_method.len == 0 {
 		if g.inside_vweb_tmpl {
 			g.write('vweb__filter(')
 			if expr.is_auto_deref_var() {
@@ -139,11 +140,27 @@ fn (mut g Gen) str_val(node ast.StringInterLiteral, i int) {
 			}
 			g.expr(expr)
 		}
+	} else if typ_sym.kind == .interface_ && (typ_sym.info as ast.Interface).defines_method('str') {
+		rec_type_name := util.no_dots(g.cc_type(typ, false))
+		g.write('${c_name(rec_type_name)}_name_table[')
+		g.expr(expr)
+		dot := if typ.is_ptr() { '->' } else { '.' }
+		g.write('${dot}_typ]._method_str(')
+		g.expr(expr)
+		g.write('${dot}_object')
+		g.write(')')
 	} else if node.fmts[i] == `s` || typ.has_flag(.variadic) {
 		mut exp_typ := typ
-		if expr is ast.Ident && g.comptime_var_type_map.len > 0 {
+		if expr is ast.Ident {
 			if expr.obj is ast.Var {
-				exp_typ = expr.obj.typ
+				if g.comptime_var_type_map.len > 0 || g.comptime_for_method.len > 0 {
+					exp_typ = expr.obj.typ
+				} else if expr.obj.smartcasts.len > 0 {
+					cast_sym := g.table.get_type_symbol(expr.obj.smartcasts.last())
+					if cast_sym.info is ast.Aggregate {
+						exp_typ = cast_sym.info.types[g.aggregate_type_idx]
+					}
+				}
 			}
 		}
 		g.gen_expr_to_string(expr, exp_typ)

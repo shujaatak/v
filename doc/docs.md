@@ -124,6 +124,7 @@ For more details and troubleshooting, please visit the [vab GitHub repository](h
 * [Writing documentation](#writing-documentation)
 * [Tools](#tools)
     * [v fmt](#v-fmt)
+    * [v shader](#v-shader)
     * [Profiling](#profiling)
 * [Package Management](#package-management)
 	* [Publish package](#publish-package)
@@ -4121,6 +4122,19 @@ A vfmt run is usually pretty cheap (takes <30ms).
 
 Always run `v fmt -w file.v` before pushing your code.
 
+### v shader
+
+You can use GPU shaders with V graphical apps. You write your shaders in an
+[annotated GLSL dialect](https://github.com/vlang/v/blob/1d8ece7/examples/sokol/02_cubes_glsl/cube_glsl.glsl)
+and use `v shader` to compile them for all supported target platforms.
+
+```shell
+v shader /path/to/project/dir/or/file.v
+```
+
+Currently you need to [include a header and declare a glue function](https://github.com/vlang/v/blob/c14c324/examples/sokol/02_cubes_glsl/cube_glsl.v#L43-L46) before
+using the shader in your code.
+
 ### Profiling
 
 V has good support for profiling your programs: `v -profile profile.txt run file.v`
@@ -4942,7 +4956,7 @@ Full list of builtin options:
 | `windows`, `linux`, `macos`   | `gcc`, `tinyc`    | `amd64`, `arm64`      | `debug`, `prod`, `test`   |
 | `mac`, `darwin`, `ios`,       | `clang`, `mingw`  | `x64`, `x32`          | `js`, `glibc`, `prealloc` |
 | `android`,`mach`, `dragonfly` | `msvc`            | `little_endian`       | `no_bounds_checking`, `freestanding`    |
-| `gnu`, `hpux`, `haiku`, `qnx` | `cplusplus`       | `big_endian`          |
+| `gnu`, `hpux`, `haiku`, `qnx` | `cplusplus`       | `big_endian`          | `no_segfault_handler`, `no_backtrace`, `no_main` |
 | `solaris` | | | |
 
 #### `$embed_file`
@@ -4967,6 +4981,17 @@ When you compile with `-prod`, the file *will be embedded inside* your
 executable, increasing your binary size, but making it more self contained
 and thus easier to distribute. In this case, `embedded_file.data()` will cause *no IO*,
 and it will always return the same data.
+
+`$embed_file` supports compression of the embedded file when compiling with `-prod`.
+Currently only one compression type is supported: `zlib`
+
+```v ignore
+import os
+fn main() {
+	embedded_file := $embed_file('v.png', .zlib) // compressed using zlib
+	os.write_file('exported.png', embedded_file.to_string()) ?
+}
+```
 
 #### `$tmpl` for embedding and parsing V template files
 

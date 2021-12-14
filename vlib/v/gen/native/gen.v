@@ -44,9 +44,20 @@ mut:
 	errors               []errors.Error
 	warnings             []errors.Warning
 	syms                 []Symbol
-	relocs               []Reloc
 	size_pos             []int
 	nlines               int
+	callpatches          []CallPatch
+	strs                 []String
+}
+
+struct String {
+	str string
+	pos int
+}
+
+struct CallPatch {
+	name string
+	pos  int
 }
 
 enum Size {
@@ -93,9 +104,11 @@ pub fn gen(files []&ast.File, table &ast.Table, out_name string, pref &pref.Pref
 	g.code_gen.g = g
 	g.generate_header()
 	for file in files {
+		/*
 		if file.warnings.len > 0 {
 			eprintln('warning: ${file.warnings[0]}')
 		}
+		*/
 		if file.errors.len > 0 {
 			g.n_error(file.errors[0].str())
 		}
@@ -106,7 +119,7 @@ pub fn gen(files []&ast.File, table &ast.Table, out_name string, pref &pref.Pref
 }
 
 pub fn (mut g Gen) typ(a int) &ast.TypeSymbol {
-	return &g.table.type_symbols[a]
+	return g.table.type_symbols[a]
 }
 
 pub fn (mut g Gen) generate_header() {
@@ -141,6 +154,7 @@ pub fn (mut g Gen) create_executable() {
 }
 
 pub fn (mut g Gen) generate_footer() {
+	g.patch_calls()
 	match g.pref.os {
 		.macos {
 			g.generate_macho_footer()
@@ -168,6 +182,12 @@ pub fn (g &Gen) pos() i64 {
 	return g.buf.len
 }
 
+fn (mut g Gen) write(bytes []byte) {
+	for _, b in bytes {
+		g.buf << b
+	}
+}
+
 fn (mut g Gen) write8(n int) {
 	// write 1 byte
 	g.buf << byte(n)
@@ -180,7 +200,8 @@ fn (mut g Gen) write16(n int) {
 }
 
 fn (mut g Gen) read32_at(at int) int {
-	return int(g.buf[at] | (g.buf[at + 1] << 8) | (g.buf[at + 2] << 16) | (g.buf[at + 3] << 24))
+	return int(u32(g.buf[at]) | (u32(g.buf[at + 1]) << 8) | (u32(g.buf[at + 2]) << 16) | (u32(g.buf[
+		at + 3]) << 24))
 }
 
 fn (mut g Gen) write32(n int) {
@@ -300,6 +321,9 @@ pub fn (mut g Gen) gen_print_from_expr(expr ast.Expr, name string) {
 			}
 		}
 		ast.None {}
+		ast.EmptyExpr {
+			g.n_error('unhandled EmptyExpr')
+		}
 		ast.PostfixExpr {}
 		ast.PrefixExpr {}
 		ast.SelectorExpr {
@@ -316,6 +340,7 @@ g.expr
 			dump(expr)
 			g.v_error('struct.field selector not yet implemented for this backend', expr.pos)
 		}
+		ast.NodeError {}
 		/*
 		ast.AnonFn {}
 		ast.ArrayDecompose {}
@@ -332,45 +357,72 @@ g.expr
 		ast.ComptimeSelector {}
 		ast.ConcatExpr {}
 		ast.DumpExpr {}
-		ast.EmptyExpr {}
 		ast.EnumVal {}
-		ast.FloatLiteral {}
 		ast.GoExpr {}
-		ast.IfExpr {}
 		ast.IfGuardExpr {}
 		ast.IndexExpr {}
 		ast.InfixExpr {}
 		ast.IsRefType {}
-		ast.Likely {}
-		ast.LockExpr {}
 		ast.MapInit {}
 		ast.MatchExpr {}
-		ast.NodeError {}
 		ast.OrExpr {}
 		ast.ParExpr {}
 		ast.RangeExpr {}
 		ast.SelectExpr {}
 		ast.SqlExpr {}
-		ast.StringInterLiteral {}
-		ast.StructInit {}
 		ast.TypeNode {}
 		ast.TypeOf {}
-		ast.UnsafeExpr {}
 		*/
+		ast.LockExpr {
+			// passthru
+			eprintln('Warning: locks not implemented yet in the native backend')
+			g.expr(expr)
+		}
+		ast.Likely {
+			// passthru
+			g.expr(expr)
+		}
+		ast.UnsafeExpr {
+			// passthru
+			g.expr(expr)
+		}
+		ast.StringInterLiteral {
+			g.n_error('Interlaced string literals are not yet supported in the native backend.') // , expr.pos)
+		}
 		else {
 			dump(typeof(expr).name)
 			dump(expr)
 			//	g.v_error('expected string as argument for print', expr.pos)
 			g.n_error('expected string as argument for print') // , expr.pos)
-			// g.warning('expected string as argument for print')
 		}
 	}
 }
 
+fn (mut g Gen) fn_decl(node ast.FnDecl) {
+	if g.pref.is_verbose {
+		println(term.green('\n$node.name:'))
+	}
+	if node.is_deprecated {
+		g.warning('fn_decl: $node.name is deprecated', node.pos)
+	}
+	if node.is_builtin {
+		g.warning('fn_decl: $node.name is builtin', node.pos)
+	}
+	g.stack_var_pos = 0
+	g.register_function_address(node.name)
+	if g.pref.arch == .arm64 {
+		g.fn_decl_arm64(node)
+	} else {
+		g.fn_decl_amd64(node)
+	}
+}
+
 pub fn (mut g Gen) register_function_address(name string) {
-	addr := g.pos()
-	// eprintln('register function $name = $addr')
-	g.fn_addr[name] = addr
+	if name == 'main.main' {
+		g.main_fn_addr = i64(g.buf.len)
+	} else {
+		g.fn_addr[name] = g.pos()
+	}
 }
 
 fn (mut g Gen) println(comment string) {
@@ -394,25 +446,84 @@ fn (mut g Gen) println(comment string) {
 	println(' ' + comment)
 }
 
-fn (mut g Gen) for_in_stmt(node ast.ForInStmt) {
-	g.v_error('for-in statement is not yet implemented', node.pos)
-	/*
-	if node.is_range {
-		// `for x in 1..10 {`
-		// i := if node.val_var == '_' { g.new_tmp_var() } else { c_name(node.val_var) }
-		// val_typ := g.table.mktyp(node.val_type)
-		g.write32(0x3131) // 'for (${g.typ(val_typ)} $i = ')
+fn (mut g Gen) gen_forc_stmt(node ast.ForCStmt) {
+	if node.has_init {
+		g.stmts([node.init])
+	}
+	start := g.pos()
+	mut jump_addr := i64(0)
+	if node.has_cond {
+		cond := node.cond
+		match cond {
+			ast.InfixExpr {
+				// g.infix_expr(node.cond)
+				match mut cond.left {
+					ast.Ident {
+						lit := cond.right as ast.IntegerLiteral
+						g.cmp_var(cond.left.name, lit.val.int())
+						match cond.op {
+							.gt {
+								jump_addr = g.cjmp(.jle)
+							}
+							.lt {
+								jump_addr = g.cjmp(.jge)
+							}
+							else {
+								g.n_error('unsupported conditional in for-c loop')
+							}
+						}
+					}
+					else {
+						g.n_error('unhandled infix.left')
+					}
+				}
+			}
+			else {}
+		}
+		// dump(node.cond)
 		g.expr(node.cond)
-		g.write32(0x3232) // ; $i < ')
-		g.expr(node.high)
-		g.write32(0x3333) // '; ++$i) {')
+	}
+	g.stmts(node.stmts)
+	if node.has_inc {
+		g.stmts([node.inc])
+	}
+	g.jmp(int(0xffffffff - (g.pos() + 5 - start) + 1))
+	g.write32_at(jump_addr, int(g.pos() - jump_addr - 4))
+
+	// loop back
+}
+
+fn (mut g Gen) for_in_stmt(node ast.ForInStmt) {
+	if node.stmts.len == 0 {
+		// if no statements, just dont make it
+		return
+	}
+	if node.is_range {
+		// for a in node.cond .. node.high {
+		i := g.allocate_var(node.val_var, 8, 0) // iterator variable
+		g.expr(node.cond)
+		g.mov_reg_to_var(i, .rax) // i = node.cond // initial value
+		start := g.pos() // label-begin:
+		g.mov_var_to_reg(.rbx, i) // rbx = iterator value
+		g.expr(node.high) // final value
+		g.cmp_reg(.rbx, .rax) // rbx = iterator, rax = max value
+		jump_addr := g.cjmp(.jge) // leave loop if i is beyond end
+		g.stmts(node.stmts)
+		g.inc_var(node.val_var)
+		g.jmp(int(0xffffffff - (g.pos() + 5 - start) + 1))
+		g.write32_at(jump_addr, int(g.pos() - jump_addr - 4))
+		/*
 		} else if node.kind == .array {
 	} else if node.kind == .array_fixed {
 	} else if node.kind == .map {
 	} else if node.kind == .string {
 	} else if node.kind == .struct_ {
+	} else if it.kind in [.array, .string] || it.cond_type.has_flag(.variadic) {
+	} else if it.kind == .map {
+		*/
+	} else {
+		g.v_error('for-in statement is not yet implemented', node.pos)
 	}
-	*/
 }
 
 pub fn (mut g Gen) gen_exit(node ast.Expr) {
@@ -434,6 +545,9 @@ fn (mut g Gen) stmt(node ast.Stmt) {
 		}
 		ast.FnDecl {
 			g.fn_decl(node)
+		}
+		ast.ForCStmt {
+			g.gen_forc_stmt(node)
 		}
 		ast.ForInStmt {
 			g.for_in_stmt(node)
@@ -567,7 +681,10 @@ fn (mut g Gen) expr(node ast.Expr) {
 		ast.ArrayInit {
 			g.n_error('array init expr not supported yet')
 		}
-		ast.BoolLiteral {}
+		ast.BoolLiteral {
+			g.mov64(.rax, if node.val { 1 } else { 0 })
+			eprintln('bool literal')
+		}
 		ast.CallExpr {
 			if node.name == 'C.syscall' {
 				g.gen_syscall(node)
@@ -581,7 +698,12 @@ fn (mut g Gen) expr(node ast.Expr) {
 			}
 		}
 		ast.FloatLiteral {}
-		ast.Ident {}
+		ast.Ident {
+			offset := g.get_var_offset(node.obj.name) // i := 0
+			// offset := g.get_var_offset(node.name)
+			// XXX this is intel specific
+			g.mov_var_to_reg(.rax, offset)
+		}
 		ast.IfExpr {
 			if node.is_comptime {
 				eprintln('Warning: ignored compile time conditional not yet supported for the native backend.')
@@ -589,15 +711,22 @@ fn (mut g Gen) expr(node ast.Expr) {
 				g.if_expr(node)
 			}
 		}
-		ast.InfixExpr {}
-		ast.IntegerLiteral {}
+		ast.InfixExpr {
+			g.infix_expr(node)
+			// get variable by name
+			// save the result in rax
+		}
+		ast.IntegerLiteral {
+			g.mov64(.rax, node.val.int())
+			// g.gen_print_reg(.rax, 3, fd)
+		}
 		ast.PostfixExpr {
 			g.postfix_expr(node)
 		}
 		ast.StringLiteral {}
 		ast.StructInit {}
 		ast.GoExpr {
-			g.v_error('native backend doesnt support threads yet', node.pos) // token.Position{})
+			g.v_error('native backend doesnt support threads yet', node.pos)
 		}
 		else {
 			g.n_error('expr: unhandled node type: $node.type_name()')
@@ -617,8 +746,14 @@ fn (mut g Gen) postfix_expr(node ast.PostfixExpr) {
 	}
 	ident := node.expr as ast.Ident
 	var_name := ident.name
-	if node.op == .inc {
-		g.inc_var(var_name)
+	match node.op {
+		.inc {
+			g.inc_var(var_name)
+		}
+		.dec {
+			g.dec_var(var_name)
+		}
+		else {}
 	}
 }
 

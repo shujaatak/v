@@ -46,7 +46,7 @@ pub fn set_vroot_folder(vroot_path string) {
 	// VEXE env variable is needed so that compiler.vexe_path()
 	// can return it later to whoever needs it:
 	vname := if os.user_os() == 'windows' { 'v.exe' } else { 'v' }
-	os.setenv('VEXE', os.real_path(os.join_path(vroot_path, vname)), true)
+	os.setenv('VEXE', os.real_path(os.join_path_single(vroot_path, vname)), true)
 	os.setenv('VCHILD', 'true', true)
 }
 
@@ -115,17 +115,18 @@ pub fn resolve_env_value(str string, check_for_presence bool) ?string {
 // V itself. That mechanism can be disabled by package managers by creating/touching a small
 // `cmd/tools/.disable_autorecompilation` file, OR by changing the timestamps of all executables
 // in cmd/tools to be < 1024 seconds (in unix time).
+[noreturn]
 pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 	vexe := pref.vexe_path()
 	vroot := os.dir(vexe)
 	set_vroot_folder(vroot)
 	tool_args := args_quote_paths(args)
 	tools_folder := os.join_path(vroot, 'cmd', 'tools')
-	tool_basename := os.real_path(os.join_path(tools_folder, tool_name))
+	tool_basename := os.real_path(os.join_path_single(tools_folder, tool_name))
 	mut tool_exe := ''
 	mut tool_source := ''
 	if os.is_dir(tool_basename) {
-		tool_exe = path_of_executable(os.join_path(tool_basename, tool_name))
+		tool_exe = path_of_executable(os.join_path_single(tool_basename, os.file_name(tool_name)))
 		tool_source = tool_basename
 	} else {
 		tool_exe = path_of_executable(tool_basename)
@@ -177,6 +178,7 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 	} $else {
 		os.execvp(tool_exe, args) or { panic(err) }
 	}
+	exit(2)
 }
 
 // NB: should_recompile_tool/4 compares unix timestamps that have 1 second resolution
@@ -240,7 +242,7 @@ pub fn should_recompile_tool(vexe string, tool_source string, tool_name string, 
 fn tool_source2name_and_exe(tool_source string) (string, string) {
 	sfolder := os.dir(tool_source)
 	tool_name := os.base(tool_source).replace('.v', '')
-	tool_exe := os.join_path(sfolder, path_of_executable(tool_name))
+	tool_exe := os.join_path_single(sfolder, path_of_executable(tool_name))
 	return tool_name, tool_exe
 }
 
@@ -282,12 +284,14 @@ pub fn cached_read_source_file(path string) ?string {
 	if isnil(cache) {
 		cache = &SourceCache{}
 	}
+
 	if path.len == 0 {
 		unsafe { cache.sources.free() }
 		unsafe { free(cache) }
 		cache = &SourceCache(0)
 		return error('memory source file cache cleared')
 	}
+
 	// eprintln('>> cached_read_source_file path: $path')
 	if res := cache.sources[path] {
 		// eprintln('>> cached')
@@ -298,26 +302,6 @@ pub fn cached_read_source_file(path string) ?string {
 	res := skip_bom(raw_text)
 	cache.sources[path] = res
 	return res
-}
-
-pub fn read_file(file_path string) ?string {
-	return unsafe { cached_read_source_file(file_path) }
-}
-
-pub fn skip_bom(file_content string) string {
-	mut raw_text := file_content
-	// BOM check
-	if raw_text.len >= 3 {
-		unsafe {
-			c_text := raw_text.str
-			if c_text[0] == 0xEF && c_text[1] == 0xBB && c_text[2] == 0xBF {
-				// skip three BOM bytes
-				offset_from_begin := 3
-				raw_text = tos(c_text[offset_from_begin], vstrlen(c_text) - offset_from_begin)
-			}
-		}
-	}
-	return raw_text
 }
 
 pub fn replace_op(s string) string {
@@ -357,8 +341,8 @@ fn non_empty(arg []string) []string {
 }
 
 pub fn check_module_is_installed(modulename string, is_verbose bool) ?bool {
-	mpath := os.join_path(os.vmodules_dir(), modulename)
-	mod_v_file := os.join_path(mpath, 'v.mod')
+	mpath := os.join_path_single(os.vmodules_dir(), modulename)
+	mod_v_file := os.join_path_single(mpath, 'v.mod')
 	murl := 'https://github.com/vlang/$modulename'
 	if is_verbose {
 		eprintln('check_module_is_installed: mpath: $mpath')
@@ -484,7 +468,7 @@ pub fn get_vtmp_folder() string {
 		return vtmp
 	}
 	uid := os.getuid()
-	vtmp = os.join_path(os.temp_dir(), 'v_$uid')
+	vtmp = os.join_path_single(os.temp_dir(), 'v_$uid')
 	if !os.exists(vtmp) || !os.is_dir(vtmp) {
 		os.mkdir_all(vtmp) or { panic(err) }
 	}
@@ -527,4 +511,8 @@ pub fn free_caches() {
 		cached_file2sourcelines('')
 		cached_read_source_file('') or { '' }
 	}
+}
+
+pub fn read_file(file_path string) ?string {
+	return unsafe { cached_read_source_file(file_path) }
 }

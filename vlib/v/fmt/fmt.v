@@ -203,7 +203,7 @@ pub fn (mut f Fmt) no_cur_mod(typename string) string {
 
 // foo.bar.fn() => bar.fn()
 pub fn (mut f Fmt) short_module(name string) string {
-	if !name.contains('.') {
+	if !name.contains('.') || name.starts_with('JS.') {
 		return name
 	}
 	if name in f.mod2alias {
@@ -711,15 +711,11 @@ fn expr_is_single_line(expr ast.Expr) bool {
 
 pub fn (mut f Fmt) assert_stmt(node ast.AssertStmt) {
 	f.write('assert ')
-	if node.expr is ast.ParExpr {
-		if node.expr.expr is ast.InfixExpr {
-			infix := node.expr.expr
-			f.expr(infix)
-			f.writeln('')
-			return
-		}
+	mut expr := node.expr
+	for expr is ast.ParExpr {
+		expr = (expr as ast.ParExpr).expr
 	}
-	f.expr(node.expr)
+	f.expr(expr)
 	f.writeln('')
 }
 
@@ -1002,6 +998,7 @@ pub fn (mut f Fmt) for_stmt(node ast.ForStmt) {
 }
 
 pub fn (mut f Fmt) global_decl(node ast.GlobalDecl) {
+	f.attrs(node.attrs)
 	if node.fields.len == 0 && node.pos.line_nr == node.pos.last_line {
 		f.writeln('__global ()')
 		return
@@ -1616,7 +1613,14 @@ fn (mut f Fmt) write_generic_call_if_require(node ast.CallExpr) {
 	if node.concrete_types.len > 0 {
 		f.write('<')
 		for i, concrete_type in node.concrete_types {
-			f.write(f.short_module(f.table.type_to_str_using_aliases(concrete_type, f.mod2alias)))
+			mut name := f.table.type_to_str_using_aliases(concrete_type, f.mod2alias)
+			tsym := f.table.get_type_symbol(concrete_type)
+			if tsym.language != .js && !tsym.name.starts_with('JS.') {
+				name = f.short_module(name)
+			} else if tsym.language == .js && !tsym.name.starts_with('JS.') {
+				name = 'JS.' + name
+			}
+			f.write(name)
 			if i != node.concrete_types.len - 1 {
 				f.write(', ')
 			}
@@ -1696,7 +1700,11 @@ pub fn (mut f Fmt) comptime_call(node ast.ComptimeCall) {
 		}
 	} else {
 		if node.is_embed {
-			f.write("\$embed_file('$node.embed_file.rpath')")
+			if node.embed_file.compression_type == 'none' {
+				f.write("\$embed_file('$node.embed_file.rpath')")
+			} else {
+				f.write("\$embed_file('$node.embed_file.rpath', .$node.embed_file.compression_type)")
+			}
 		} else if node.is_env {
 			f.write("\$env('$node.args_var')")
 		} else if node.is_pkgconfig {

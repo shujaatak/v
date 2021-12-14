@@ -95,6 +95,14 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 	if !is_html {
 		p.check(.string)
 	}
+	mut embed_compression_type := 'none'
+	if is_embed_file {
+		if p.tok.kind == .comma {
+			p.check(.comma)
+			p.check(.dot)
+			embed_compression_type = p.check_name()
+		}
+	}
 	p.check(.rpar)
 	// $embed_file('/path/to/file')
 	if is_embed_file {
@@ -110,7 +118,7 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 			// check absolute path first
 			if !os.exists(abs_path) {
 				// ... look relative to the source file:
-				epath = os.real_path(os.join_path(os.dir(p.file_name), epath))
+				epath = os.real_path(os.join_path_single(os.dir(p.file_name), epath))
 				if !os.exists(epath) {
 					p.error_with_pos('"$epath" does not exist so it cannot be embedded',
 						spos)
@@ -125,13 +133,18 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 				epath = abs_path
 			}
 		}
-		p.register_auto_import('v.embed_file')
+		p.register_auto_import('v.preludes.embed_file')
+		if embed_compression_type == 'zlib'
+			&& (p.pref.is_prod || 'debug_embed_file_in_prod' in p.pref.compile_defines) {
+			p.register_auto_import('v.preludes.embed_file.zlib')
+		}
 		return ast.ComptimeCall{
 			scope: 0
 			is_embed: true
 			embed_file: ast.EmbeddedFile{
 				rpath: literal_string_param
 				apath: epath
+				compression_type: embed_compression_type
 			}
 			pos: start_pos.extend(p.prev_tok.position())
 		}
@@ -144,11 +157,15 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 	tmpl_path := if is_html { '${fn_path.last()}.html' } else { path_of_literal_string_param }
 	// Looking next to the vweb program
 	dir := os.dir(compiled_vfile_path)
-	mut path := os.join_path(dir, fn_path_joined)
+	mut path := os.join_path_single(dir, fn_path_joined)
 	path += '.html'
 	path = os.real_path(path)
 	if !is_html {
-		path = os.join_path(dir, tmpl_path)
+		if os.is_abs_path(tmpl_path) {
+			path = tmpl_path
+		} else {
+			path = os.join_path_single(dir, tmpl_path)
+		}
 	}
 	if !os.exists(path) {
 		if is_html {
@@ -175,7 +192,7 @@ fn (mut p Parser) comptime_call() ast.ComptimeCall {
 		}
 		// println('path is now "$path"')
 	}
-	tmp_fn_name := p.cur_fn_name.replace('.', '__')
+	tmp_fn_name := p.cur_fn_name.replace('.', '__') + start_pos.pos.str()
 	$if trace_comptime ? {
 		println('>>> compiling comptime template file "$path" for $tmp_fn_name')
 	}

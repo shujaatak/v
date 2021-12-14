@@ -66,23 +66,35 @@ fn (mut g JsGen) js_call(node ast.CallExpr) {
 	g.call_stack << node
 	it := node
 	call_return_is_optional := it.return_type.has_flag(.optional)
+	is_await := node.name == 'JS.await'
 	if call_return_is_optional {
-		g.writeln('(function () {')
+		if is_await {
+			g.writeln('await (async function () {')
+		} else {
+			g.writeln('(function () {')
+		}
 		g.writeln('try {')
 		g.writeln('let tmp = ')
 	}
 	if it.is_ctor_new {
 		g.write('new ')
 	}
-	g.write('${g.js_mname(it.name)}(')
-	for i, arg in it.args {
-		g.expr(arg.expr)
-		if i != it.args.len - 1 {
-			g.write(', ')
+	if is_await {
+		g.write('await (')
+
+		g.expr(it.args[0].expr)
+		g.write(').promise')
+	} else {
+		g.write('${g.js_mname(it.name)}(')
+		for i, arg in it.args {
+			g.expr(arg.expr)
+			if i != it.args.len - 1 {
+				g.write(', ')
+			}
 		}
+		// end call
+		g.write(')')
 	}
-	// end call
-	g.write(')')
 	if call_return_is_optional {
 		g.write(';\n')
 		g.writeln('if (tmp === null) throw "none";')
@@ -178,9 +190,15 @@ fn (mut g JsGen) method_call(node ast.CallExpr) {
 		g.gen_expr_to_string(node.left, node.left_type)
 		return
 	}
+	is_async := node.name == 'wait'
+		&& g.table.get_type_symbol(node.receiver_type).name.starts_with('Promise<')
 	call_return_is_optional := it.return_type.has_flag(.optional)
 	if call_return_is_optional {
-		g.writeln('(function(){')
+		if is_async {
+			g.writeln('(async function (){')
+		} else {
+			g.writeln('(function(){')
+		}
 		g.inc_indent()
 		g.writeln('try {')
 		g.inc_indent()
@@ -194,14 +212,16 @@ fn (mut g JsGen) method_call(node ast.CallExpr) {
 		g.get_str_fn(rec_type)
 	}
 	mut unwrapped_rec_type := node.receiver_type
-	if g.table.cur_fn.generic_names.len > 0 {
+	if g.fn_decl != 0 && g.fn_decl.generic_names.len > 0 { // in generic fn
 		unwrapped_rec_type = g.unwrap_generic(node.receiver_type)
-	} else {
+	} else { // in non-generic fn
 		sym := g.table.get_type_symbol(node.receiver_type)
 		match sym.info {
 			ast.Struct, ast.Interface, ast.SumType {
 				generic_names := sym.info.generic_types.map(g.table.get_type_symbol(it).name)
-				if utyp := g.table.resolve_generic_to_concrete(node.receiver_type, generic_names,
+				// see comment at top of vlib/v/gen/c/utils.v
+				mut muttable := unsafe { &ast.Table(g.table) }
+				if utyp := muttable.resolve_generic_to_concrete(node.receiver_type, generic_names,
 					sym.info.concrete_types)
 				{
 					unwrapped_rec_type = utyp
@@ -294,20 +314,27 @@ fn (mut g JsGen) method_call(node ast.CallExpr) {
 			receiver_type_name = 'array'
 		}
 	}
-	mut name := util.no_dots('${receiver_type_name}_$node.name')
 
-	name = g.generic_fn_name(node.concrete_types, name, false)
-	g.write('${name}(')
-	g.expr(it.left)
-	g.gen_deref_ptr(it.left_type)
-	g.write(',')
-	for i, arg in it.args {
-		g.expr(arg.expr)
-		if i != it.args.len - 1 {
-			g.write(', ')
+	if is_async {
+		g.write('await ')
+		g.expr(it.left)
+		g.write('.promise')
+	} else {
+		mut name := util.no_dots('${receiver_type_name}_$node.name')
+
+		name = g.generic_fn_name(node.concrete_types, name, false)
+		g.write('${name}(')
+		g.expr(it.left)
+		g.gen_deref_ptr(it.left_type)
+		g.write(',')
+		for i, arg in it.args {
+			g.expr(arg.expr)
+			if i != it.args.len - 1 {
+				g.write(', ')
+			}
 		}
+		g.write(')')
 	}
-	g.write(')')
 
 	if call_return_is_optional {
 		// end unwrap
@@ -392,6 +419,7 @@ fn (mut g JsGen) gen_call_expr(it ast.CallExpr) {
 		g.write(')')
 		return
 	}
+	name = g.generic_fn_name(node.concrete_types, name, false)
 	g.expr(it.left)
 
 	g.write('${name}(')
@@ -539,6 +567,21 @@ fn (mut g JsGen) generic_fn_name(types []ast.Type, before string, is_decl bool) 
 }
 
 fn (mut g JsGen) gen_method_decl(it ast.FnDecl, typ FnGenType) {
+	node := it
+	if node.generic_names.len > 0 && g.cur_concrete_types.len == 0 { // need the cur_concrete_type check to avoid inf. recursion
+		// loop thru each generic type and generate a function
+		for concrete_types in g.table.fn_generic_types[node.name] {
+			if g.pref.is_verbose {
+				syms := concrete_types.map(g.table.get_type_symbol(it))
+				the_type := syms.map(it.name).join(', ')
+				println('gen fn `$node.name` for type `$the_type`')
+			}
+			g.cur_concrete_types = concrete_types
+			g.gen_method_decl(node, typ)
+		}
+		g.cur_concrete_types = []
+		return
+	}
 	cur_fn_decl := g.fn_decl
 	unsafe {
 		g.fn_decl = &it
@@ -550,22 +593,17 @@ fn (mut g JsGen) gen_method_decl(it ast.FnDecl, typ FnGenType) {
 	unsafe {
 		g.table.cur_fn = &it
 	}
-	node := it
 	mut name := it.name
 	if name in ['+', '-', '*', '/', '%', '<', '=='] {
 		name = util.replace_op(name)
 	}
 
 	if node.is_method {
-		unwrapped_rec_sym := g.table.get_type_symbol(g.unwrap_generic(node.receiver.typ))
-		if unwrapped_rec_sym.kind == .placeholder {
-			return
-		}
 		name = g.cc_type(node.receiver.typ, false) + '_' + name
 	}
 	name = g.js_name(name)
 
-	name = g.generic_fn_name(g.table.cur_concrete_types, name, true)
+	name = g.generic_fn_name(g.cur_concrete_types, name, true)
 	if name in parser.builtin_functions {
 		name = 'builtin__$name'
 	}
@@ -576,18 +614,20 @@ fn (mut g JsGen) gen_method_decl(it ast.FnDecl, typ FnGenType) {
 		g.writeln('${g.typ(it.receiver.typ)}.prototype.$it.name = ')
 	}
 
-	has_go := fn_has_go(it)
-
+	mut has_go := fn_has_go(it) || it.has_await
+	for attr in it.attrs {
+		if attr.name == 'async' {
+			has_go = true
+			break
+		}
+	}
 	is_main := it.name == 'main.main'
 	g.gen_attrs(it.attrs)
 	if is_main {
 		// there is no concept of main in JS but we do have iife
 		g.writeln('/* program entry point */')
-
-		// g.write('(')
-		if has_go {
-			g.write('async ')
-		}
+		// main function is always async
+		g.write('async ')
 		g.write('function js_main(')
 	} else if it.is_anon {
 		g.write('function (')
@@ -620,8 +660,11 @@ fn (mut g JsGen) gen_method_decl(it ast.FnDecl, typ FnGenType) {
 		if is_varg {
 			g.writeln('$arg_name = new array(new array_buffer({arr: $arg_name,len: new int(${arg_name}.length),index_start: new int(0)}));')
 		} else {
-			if arg.typ.is_ptr() || arg.is_mut {
-				g.writeln('$arg_name = new \$ref($arg_name)')
+			asym := g.table.get_type_symbol(arg.typ)
+			if asym.kind != .interface_ && asym.language != .js {
+				if arg.typ.is_ptr() || arg.is_mut {
+					g.writeln('$arg_name = new \$ref($arg_name)')
+				}
 			}
 		}
 	}
@@ -743,7 +786,9 @@ fn (mut g JsGen) gen_anon_fn(mut fun ast.AnonFn) {
 		if is_varg {
 			g.writeln('$arg_name = new array(new array_buffer({arr: $arg_name,len: new int(${arg_name}.length),index_start: new int(0)}));')
 		} else {
-			if arg.typ.is_ptr() || arg.is_mut {
+			asym := g.table.get_type_symbol(arg.typ)
+
+			if arg.typ.is_ptr() || (arg.is_mut && asym.kind != .interface_ && asym.language != .js) {
 				g.writeln('$arg_name = new \$ref($arg_name)')
 			}
 		}
